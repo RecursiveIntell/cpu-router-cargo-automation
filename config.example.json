@@ -1,0 +1,26 @@
+{
+  "receipt_dir": "~/.local/state/cpu-router/client-receipts",
+  "real_cargo": "~/.cargo/bin/cargo",
+  "nodes": {
+    "x86_64": {
+      "node": "X86_BUILD_HOSTNAME",
+      "host": "X86_BUILD_HOST_OR_IP",
+      "port": 22,
+      "user": "REMOTE_USER",
+      "identity_file": "~/.ssh/cpu_router_tasks_ed25519",
+      "known_hosts_file": "~/.ssh/cpu_router_known_hosts",
+      "toolchain": "PINNED_X86_64_TOOLCHAIN",
+      "expected_worker_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+    },
+    "aarch64": {
+      "node": "ARM64_BUILD_HOSTNAME",
+      "host": "ARM64_BUILD_HOST_OR_IP",
+      "port": 22,
+      "user": "REMOTE_USER",
+      "identity_file": "~/.ssh/cpu_router_tasks_ed25519",
+      "known_hosts_file": "~/.ssh/cpu_router_known_hosts",
+      "toolchain": "PINNED_AARCH64_TOOLCHAIN",
+      "expected_worker_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+    }
+  }
+}
