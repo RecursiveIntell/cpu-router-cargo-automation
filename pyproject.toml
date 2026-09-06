@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cpu-router-cargo-automation"
+version = "0.1.0"
+description = "Fail-closed architecture-owned Cargo job routing over restricted SSH"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Josh Stevenson" }]
+keywords = ["cargo", "rust", "distributed-build", "ssh", "build-automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Build Tools",
+]
+dependencies = []
+
+[project.scripts]
+cpu-router = "cpu_router.client:main"
+cpu-cargo = "cpu_router.cargo_wrapper:main"
+cpu-router-agent = "cpu_router.agent:main"
+cpu-router-submit = "cpu_router.submit:main"
+cpu-router-worker-sha256 = "cpu_router.worker:print_worker_sha256"
+
+[project.urls]
+Repository = "https://github.com/RecursiveIntell/cpu-router-cargo-automation"
+Issues = "https://github.com/RecursiveIntell/cpu-router-cargo-automation/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cpu_router"]
