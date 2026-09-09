@@ -23,6 +23,9 @@ TARGET_ARCHITECTURES = {
     "aarch64-unknown-linux-gnu": "aarch64",
 }
 REMOTE_ACTIONS = {"check", "test", "build"}
+# Tauri commands may depend on local application and frontend tooling, so they
+# are intentionally excluded from the remote Cargo job protocol.
+LOCAL_ONLY_SUBCOMMANDS = {"tauri"}
 RETRY_DELAYS = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
 
 
@@ -58,6 +61,11 @@ def requested_architecture(arguments: list[str]) -> tuple[str, list[str], str | 
     if target not in TARGET_ARCHITECTURES:
         raise ValueError(f"target is not an admitted native owner: {target}")
     return TARGET_ARCHITECTURES[target], stripped, target
+
+
+def is_local_only_command(arguments: list[str]) -> bool:
+    """Return whether Cargo's top-level command requires local execution."""
+    return bool(arguments) and arguments[0] in LOCAL_ONLY_SUBCOMMANDS
 
 
 def promote_artifact(
@@ -110,6 +118,12 @@ def promote_artifact(
 def main() -> int:
     config = load_config()
     arguments = sys.argv[1:]
+    if is_local_only_command(arguments):
+        passthrough(
+            config,
+            arguments,
+            "Tauri commands are intentionally excluded from the remote Cargo job protocol",
+        )
     if not arguments or arguments[0] not in REMOTE_ACTIONS:
         passthrough(config, arguments, "subcommand is not an admitted remote action")
     action = arguments[0]
