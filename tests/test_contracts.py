@@ -150,6 +150,39 @@ class ConfigTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_tauri_commands_are_explicitly_local_only(self):
+        self.assertTrue(cargo_wrapper.is_local_only_command(["tauri", "dev"]))
+        self.assertTrue(cargo_wrapper.is_local_only_command(["tauri", "build"]))
+        self.assertFalse(cargo_wrapper.is_local_only_command(["check"]))
+        self.assertFalse(cargo_wrapper.is_local_only_command([]))
+
+    def test_main_passthrough_keeps_tauri_commands_out_of_remote_dispatch(self):
+        settings = SimpleNamespace()
+        for arguments in (
+            ["tauri", "dev", "--features", "semantic-memory-turbo-quant"],
+            ["tauri", "build"],
+        ):
+            with self.subTest(arguments=arguments):
+                with (
+                    mock.patch("cpu_router.cargo_wrapper.load_config", return_value=settings),
+                    mock.patch(
+                        "cpu_router.cargo_wrapper.passthrough",
+                        side_effect=SystemExit(0),
+                    ) as passthrough,
+                    mock.patch("cpu_router.cargo_wrapper.dispatch") as dispatch,
+                    mock.patch(
+                        "cpu_router.cargo_wrapper.sys.argv", ["cpu-cargo", *arguments]
+                    ),
+                ):
+                    with self.assertRaises(SystemExit):
+                        cargo_wrapper.main()
+                    passthrough.assert_called_once_with(
+                        settings,
+                        arguments,
+                        "Tauri commands are intentionally excluded from the remote Cargo job protocol",
+                    )
+                    dispatch.assert_not_called()
+
     def test_target_selection_is_explicit(self):
         architecture, arguments, target = cargo_wrapper.requested_architecture(
             ["--target", "aarch64-unknown-linux-gnu", "--release"]
