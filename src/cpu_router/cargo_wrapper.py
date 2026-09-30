@@ -33,7 +33,18 @@ def passthrough(config: Config, arguments: list[str], reason: str) -> NoReturn:
     print(f"[cpu-router] local Cargo: {reason}", file=sys.stderr)
     if not config.real_cargo.is_file():
         raise SystemExit(f"real Cargo is unavailable: {config.real_cargo}")
-    os.execv(config.real_cargo, [str(config.real_cargo), *arguments])
+    environment = os.environ.copy()
+    sibling_rustc = config.real_cargo.with_name("rustc")
+    if sibling_rustc.is_file():
+        # A directly invoked rustup toolchain Cargo otherwise launches the
+        # ambient rustc proxy, which can honor a dependency-local toolchain
+        # override and pair a new Cargo with an incompatible old compiler.
+        environment["RUSTC"] = str(sibling_rustc)
+    os.execve(
+        config.real_cargo,
+        [str(config.real_cargo), *arguments],
+        environment,
+    )
 
 
 def requested_architecture(arguments: list[str]) -> tuple[str, list[str], str | None]:
