@@ -183,6 +183,32 @@ class RoutingTests(unittest.TestCase):
                     )
                     dispatch.assert_not_called()
 
+    def test_passthrough_pairs_real_cargo_with_its_sibling_rustc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_cargo = root / "cargo"
+            real_rustc = root / "rustc"
+            real_cargo.touch()
+            real_rustc.touch()
+            settings = config.Config(
+                receipt_dir=root / "receipts", real_cargo=real_cargo, nodes={}
+            )
+            with (
+                mock.patch.dict(os.environ, {"RUSTC": "/ambient/rustc"}),
+                mock.patch("cpu_router.cargo_wrapper.os.execv") as legacy_exec,
+                mock.patch(
+                    "cpu_router.cargo_wrapper.os.execve", side_effect=SystemExit(0)
+                ) as paired_exec,
+            ):
+                with self.assertRaises(SystemExit):
+                    cargo_wrapper.passthrough(settings, ["check"], "test")
+
+            legacy_exec.assert_not_called()
+            executable, arguments, environment = paired_exec.call_args.args
+            self.assertEqual(executable, real_cargo)
+            self.assertEqual(arguments, [str(real_cargo), "check"])
+            self.assertEqual(environment["RUSTC"], str(real_rustc))
+
     def test_target_selection_is_explicit(self):
         architecture, arguments, target = cargo_wrapper.requested_architecture(
             ["--target", "aarch64-unknown-linux-gnu", "--release"]
