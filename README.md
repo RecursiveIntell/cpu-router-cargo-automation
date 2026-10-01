@@ -146,7 +146,13 @@ Optional transparent command name:
 ln -s "$(command -v cpu-cargo)" ~/.local/bin/cargo
 ```
 
-Only admitted `check`, `test`, and single-binary release `build` shapes route remotely. Other commands execute the configured real Cargo and print the reason. Once a request is admitted remotely, failure never silently recompiles locally.
+Only admitted `check`, `test`, and single-binary release `build` shapes route remotely. Other commands execute the configured real Cargo and print the reason. Top-level `cargo tauri` commands are explicitly local-only. Once a request is admitted remotely, failure never silently recompiles locally.
+
+Local passthrough preserves the argument vector. When a `rustc` file exists
+beside the configured real Cargo, the wrapper sets `RUSTC` to that sibling,
+overriding an inherited `RUSTC` value so Cargo and its compiler stay paired.
+If no sibling exists, the inherited environment is retained. This local
+behavior does not expand the remote job grammar.
 
 Force a local execution:
 
