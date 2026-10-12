@@ -19,6 +19,7 @@ from pathlib import Path
 from . import __version__
 from .protocol import (
     ELF_MACHINES,
+    MAX_REQUEST_BYTES,
     REQUEST_SCHEMA,
     UUID_RE,
     canonical_architecture,
@@ -26,7 +27,7 @@ from .protocol import (
 )
 from .snapshot import validate_cargo_request, validate_envelope, verify_and_extract
 
-MAX_INPUT = 12_000_000
+MAX_INPUT = MAX_REQUEST_BYTES
 MAX_BUILD_ARTIFACT = 67_108_864
 MAX_COMPRESSED_ARTIFACT = 16_777_216
 
@@ -97,6 +98,29 @@ def validate_job(
     return value, command
 
 
+def run_cargo(command: list[str], *, cwd: Path, env: dict, timeout: int):
+    """Bound Cargo and its descendants, including inherited output pipes."""
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate(timeout=10)
+        raise
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
+
 def cargo_job(value: object, requested_architecture: str) -> dict:
     node, architecture, toolchain = configured_runtime()
     actual = canonical_architecture(platform.machine())
@@ -114,7 +138,7 @@ def cargo_job(value: object, requested_architecture: str) -> dict:
         source_root = job_root / "source"
         snapshot_result = verify_and_extract(admitted["snapshot"], source_root)
         env = cargo_environment(job_root, toolchain_root, architecture)
-        metadata = subprocess.run(
+        metadata = run_cargo(
             [
                 str(cargo),
                 "metadata",
@@ -126,21 +150,15 @@ def cargo_job(value: object, requested_architecture: str) -> dict:
             ],
             cwd=source_root,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=90,
-            check=False,
         )
         if metadata.returncode:
             raise TaskFailed("cargo metadata failed: " + metadata.stderr[-8192:])
-        proc = subprocess.run(
+        proc = run_cargo(
             [str(cargo), *command],
             cwd=source_root,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=900,
-            check=False,
         )
         if proc.returncode:
             raise TaskFailed(

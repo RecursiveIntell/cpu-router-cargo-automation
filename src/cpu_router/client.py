@@ -17,6 +17,7 @@ from .config import Config, Node, load_config
 from .protocol import (
     CLIENT_RECEIPT_SCHEMA,
     REQUEST_SCHEMA,
+    MAX_REQUEST_BYTES,
     canonical_architecture,
     canonical_json,
     sha256,
@@ -43,6 +44,10 @@ def submit_command(node: Node) -> list[str]:
         "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={node.known_hosts_file}",
+        "-o",
+        "GlobalKnownHostsFile=/dev/null",
+        "-o",
+        "KnownHostsCommand=none",
         "-o",
         "ConnectTimeout=8",
         "-o",
@@ -78,6 +83,8 @@ def dispatch(
         "value": value,
     }
     raw = canonical_json(request)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("request too large for wire limit")
     receipt = {
         "schema": CLIENT_RECEIPT_SCHEMA,
         "architecture": architecture,
@@ -101,7 +108,14 @@ def dispatch(
             check=False,
         )
         receipt["exit_code"] = proc.returncode
-        response = json.loads(proc.stdout)
+        decoded = json.loads(proc.stdout)
+        if not isinstance(decoded, dict):
+            raise ValueError("response must be a JSON object")
+        if decoded.get("result") is not None and not isinstance(
+            decoded["result"], dict
+        ):
+            raise ValueError("response result must be a JSON object")
+        response = decoded
         if response.get("status") != "ok" or proc.returncode != 0:
             receipt["status"] = response.get("status", "failed")
             receipt["error"] = response.get("error", "task failed")
@@ -164,12 +178,11 @@ def main() -> int:
         timeout=110,
     )
     print(json.dumps({"receipt": str(path), **receipt}, indent=2))
-    status = (response or {}).get("status")
-    return (
-        0
-        if receipt["status"] == "verified-transport-identity-and-worker-module"
-        else EXIT_BY_STATUS.get(str(status), 1)
-    )
+    status = receipt["status"]
+    if status == "verified-transport-identity-and-worker-module":
+        return 0
+    # An unverified success response cannot make a failed receipt succeed.
+    return EXIT_BY_STATUS.get(str(status), 1) if status != "ok" else 1
 
 
 if __name__ == "__main__":
