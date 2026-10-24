@@ -1,6 +1,6 @@
 # CPU Router / Cargo Automation
 
-<!-- last-verified: 2026-09-06 -->
+<!-- last-verified: 2026-10-23 -->
 
 Fail-closed, architecture-owned Cargo jobs over restricted SSH. A client creates a deterministic, digest-bound snapshot of a Git worktree; the configured native owner runs an allowlisted Cargo action in an isolated directory and returns a typed result or verified ELF binary.
 
@@ -128,6 +128,23 @@ cpu-router --arch aarch64 health
 ```
 
 Success is a client receipt whose status is `verified-transport-identity-and-worker-module`.
+
+## CLI and environment reference
+
+`cpu-router` accepts `--version`, `--config PATH`, required `--arch {x86_64,aarch64}`, and optional `--idempotency-key UUID`, followed by the `health` task. If no idempotency key is supplied, the client creates one. When `--config` is supplied it takes precedence over `CPU_ROUTER_CONFIG`; otherwise the config defaults to `~/.config/cpu-router/config.json`. `--help` is provided by the argument parser.
+
+The `cpu-cargo` wrapper forwards Cargo arguments; it does not define a separate option parser. These environment variables affect the client or owner processes:
+
+| Variable | Scope and behavior |
+|---|---|
+| `CPU_ROUTER_CONFIG` | Client (`cpu-router`, `cpu-cargo`): config path when `--config` is not supplied; defaults to `~/.config/cpu-router/config.json`. |
+| `CPU_ROUTER_LOCAL` | `cpu-cargo`: the value `1` forces local Cargo execution. |
+| `CPU_ROUTER_NODE`, `CPU_ROUTER_ARCH`, `CPU_ROUTER_TOOLCHAIN` | Owner agent/worker: required node identity, architecture, and configured toolchain values; the example systemd unit contains placeholders to replace. |
+| `CPU_ROUTER_MAX_JOBS` | Owner agent: maximum concurrent jobs, from 1 to 16; defaults to `1` in source, while the example systemd unit sets `2`. |
+| `RUNTIME_DIRECTORY`, `STATE_DIRECTORY` | Owner agent: runtime and durable state paths supplied by systemd; source fallbacks are `/run/user/<uid>/cpu-router` and `~/.local/state/cpu-router`. |
+| `XDG_RUNTIME_DIR` | Restricted submit helper: runtime directory used to locate the owner socket; defaults to `/run/user/<uid>` when unset. |
+
+These variables configure client, helper, and owner behavior; they do not change the documented transport or remote-job contract for remotely routed jobs.
 
 ## Cargo usage
 
