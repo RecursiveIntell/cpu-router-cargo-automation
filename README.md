@@ -1,6 +1,6 @@
 # CPU Router / Cargo Automation
 
-<!-- last-verified: 2026-10-23 -->
+<!-- last-verified: 2026-10-25 -->
 
 Fail-closed, architecture-owned Cargo jobs over restricted SSH. A client creates a deterministic, digest-bound snapshot of a Git worktree; the configured native owner runs an allowlisted Cargo action in an isolated directory and returns a typed result or verified ELF binary.
 
@@ -111,6 +111,8 @@ Create a dedicated key on each client. Do not reuse a login key:
 ```bash
 ssh-keygen -t ed25519 -N '' -f ~/.ssh/cpu_router_tasks_ed25519
 ```
+
+`-N ''` leaves the private key unencrypted at rest. Treat it as a credential that can submit trusted repository code for execution on the owner: admitted Cargo jobs run build scripts, procedural macros, tests, compilers, and linkers. Restrict access to the key and client host. For a passphrase-protected key, load it into `ssh-agent` before invoking `cpu-router`; the SSH call uses `BatchMode=yes` and will not prompt. The forced command limits SSH entry but does not make untrusted source safe.
 
 On each owner, add only that public key with a forced command and OpenSSH restrictions. Replace the executable path with the result of `command -v cpu-router-submit` on the owner:
 
