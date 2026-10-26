@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 
+MAX_REQUEST_BYTES = 12_000_000
+
 REQUEST_SCHEMA = "cpu-router/request-v1"
 SNAPSHOT_SCHEMA = "cpu-router/cargo-snapshot-v1"
 CLIENT_RECEIPT_SCHEMA = "cpu-router/client-receipt-v1"

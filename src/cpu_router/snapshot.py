@@ -98,19 +98,27 @@ def excluded_path(value: str) -> bool:
 def read_regular_file_no_follow(
     root: Path, relative: PurePosixPath
 ) -> tuple[bytes, os.stat_result]:
-    parent = root
-    for component in relative.parts[:-1]:
-        parent /= component
-        metadata = parent.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError(f"unsafe snapshot parent: {relative}")
-    path = root.joinpath(*relative.parts)
+    # Each lookup is relative to a pinned directory descriptor. A renamed
+    # parent remains pinned; replacing its pathname cannot redirect the read.
+    parent_fd = None
+    descriptor = None
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        parent_fd = os.open(root, directory_flags)
+        for component in relative.parts[:-1]:
+            child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = child_fd
+        descriptor = os.open(
+            relative.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd
+        )
     except OSError as exc:
         raise ValueError(
             f"symlink, missing, or unreadable path rejected: {relative}"
         ) from exc
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
