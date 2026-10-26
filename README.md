@@ -133,7 +133,7 @@ Success is a client receipt whose status is `verified-transport-identity-and-wor
 
 ## CLI and environment reference
 
-`cpu-router` accepts `--version`, `--config PATH`, required `--arch {x86_64,aarch64}`, and optional `--idempotency-key UUID`, followed by the `health` task. If no idempotency key is supplied, the client creates one. When `--config` is supplied it takes precedence over `CPU_ROUTER_CONFIG`; otherwise the config defaults to `~/.config/cpu-router/config.json`. `--help` is provided by the argument parser.
+`cpu-router` accepts `--version`, `--config PATH`, required `--arch {x86_64,aarch64}`, and optional `--idempotency-key UUID`, followed by the `health` task. If no idempotency key is supplied, the client creates one. When `--config` is supplied it takes precedence over `CPU_ROUTER_CONFIG`; otherwise the config defaults to `~/.config/cpu-router/config.json`. `-h` and `--help` are provided by the argument parser.
 
 The `cpu-cargo` wrapper forwards Cargo arguments; it does not define a separate option parser. These environment variables affect the client or owner processes:
 
