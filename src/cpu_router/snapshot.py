@@ -229,6 +229,136 @@ def git_snapshot(root: Path) -> Snapshot:
     return create_snapshot_from_paths(root, paths, provenance)
 
 
+SIBLING_PREFIX = "_siblings"
+
+
+def sibling_tree_digest(root: Path, relative_files: list[str]) -> str:
+    """Digest a sibling tree from its (path, sha256) pairs, sorted. Pinned in config."""
+    rows = []
+    for relative in sorted(relative_files):
+        data, _metadata = read_regular_file_no_follow(root, validate_relative_path(relative))
+        rows.append({"path": relative, "sha256": sha256(data)})
+    return sha256(canonical_json(rows))
+
+
+def build_snapshot_with_siblings(
+    app_root: Path, siblings: dict[str, dict], provenance: dict | None = None
+) -> Snapshot:
+    """Admit the app git tree plus declared out-of-root sibling trees (Task B+A).
+
+    ``siblings`` maps a sibling name (validated against NAME_RE) to a mapping with:
+      - ``root``: the sibling directory on the client (must exist and be a directory),
+      - ``files``: the relative file paths to carry from that sibling,
+      - ``tree_sha256``: the pinned digest of the sibling's (path, sha256) rows.
+
+    Each sibling is carried under ``_siblings/<name>/`` so it cannot collide with app paths. A tree
+    whose digest does not match its pin is refused before anything is admitted. The result is one
+    ordinary snapshot, so the owner's existing manifest and archive verification applies unchanged.
+    """
+    app_root = app_root.resolve(strict=True)
+    base = git_snapshot(app_root)
+    paths = [entry["path"] for entry in base.manifest]
+    extra = {}
+    for name, spec in sorted(siblings.items()):
+        if not NAME_RE.fullmatch(name):
+            raise ValueError(f"invalid sibling name: {name!r}")
+        if set(spec) != {"root", "files", "tree_sha256"}:
+            raise ValueError(f"sibling {name} must declare root, files, and tree_sha256")
+        sibling_root = Path(spec["root"]).resolve(strict=True)
+        if not sibling_root.is_dir():
+            raise ValueError(f"sibling {name} root is not a directory")
+        files = sorted({str(PurePosixPath(f)) for f in spec["files"]})
+        if not files:
+            raise ValueError(f"sibling {name} declares no files")
+        digest = sibling_tree_digest(sibling_root, files)
+        if digest != spec["tree_sha256"]:
+            raise ValueError(f"sibling {name} tree digest does not match its pin")
+        for relative in files:
+            target = f"{SIBLING_PREFIX}/{name}/{relative}"
+            paths.append(target)
+            extra[target] = (sibling_root, PurePosixPath(relative))
+    return _snapshot_from_mixed_sources(app_root, paths, extra, provenance or base.provenance)
+
+
+VENDOR_PREFIX = "_vendor"
+
+
+def build_vendor_snapshot(app_root: Path, vendor: dict, provenance: dict | None = None) -> Snapshot:
+    """Admit a pinned vendored-sources tree so an offline owner can build (Task B).
+
+    ``vendor`` declares root, files, and tree_sha256 exactly as a sibling does. The tree is carried
+    under ``_vendor/`` and admitted only if its digest matches the pin. It reuses the sibling
+    admission path, so vendored and sibling sources share one set of guarantees.
+    """
+    if set(vendor) != {"root", "files", "tree_sha256"}:
+        raise ValueError("vendor must declare root, files, and tree_sha256")
+    vendor_root = Path(vendor["root"]).resolve(strict=True)
+    if not vendor_root.is_dir():
+        raise ValueError("vendor root is not a directory")
+    files = sorted({str(PurePosixPath(f)) for f in vendor["files"]})
+    if not files:
+        raise ValueError("vendor declares no files")
+    digest = sibling_tree_digest(vendor_root, files)
+    if digest != vendor["tree_sha256"]:
+        raise ValueError("vendor tree digest does not match its pin")
+    base_paths = [entry["path"] for entry in git_snapshot(app_root).manifest]
+    extra = {}
+    paths = list(base_paths)
+    for relative in files:
+        target = f"{VENDOR_PREFIX}/{relative}"
+        paths.append(target)
+        extra[target] = (vendor_root, PurePosixPath(relative))
+    return _snapshot_from_mixed_sources(
+        app_root.resolve(strict=True), paths, extra, provenance or {}
+    )
+
+
+def _snapshot_from_mixed_sources(app_root, paths, extra, provenance) -> Snapshot:
+    """Build a snapshot whose entries come from the app root or explicit sibling roots.
+
+    Reuses the same bounds and tar layout as create_snapshot_from_paths so the owner sees one format.
+    """
+    unique = sorted(set(paths))
+    if len(unique) > MAX_FILES:
+        raise ValueError("snapshot file-count limit exceeded")
+    if "Cargo.toml" not in unique or "Cargo.lock" not in unique:
+        raise ValueError("snapshot requires root Cargo.toml and Cargo.lock")
+    manifest = []
+    payloads = {}
+    total = 0
+    for relative in unique:
+        parsed = validate_relative_path(relative)
+        if relative in extra:
+            source_root, source_relative = extra[relative]
+            data, metadata = read_regular_file_no_follow(source_root, source_relative)
+        else:
+            data, metadata = read_regular_file_no_follow(app_root, parsed)
+        total += len(data)
+        if total > MAX_TOTAL_BYTES:
+            raise ValueError("snapshot aggregate-size limit exceeded")
+        mode = 0o755 if metadata.st_mode & stat.S_IXUSR else 0o644
+        manifest.append({"path": relative, "bytes": len(data), "sha256": sha256(data), "mode": mode})
+        payloads[relative] = data
+    manifest_hash = sha256(canonical_json(manifest))
+    raw = io.BytesIO()
+    with (
+        gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0, compresslevel=6) as compressed,
+        tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive,
+    ):
+        for entry in manifest:
+            info = tarfile.TarInfo(entry["path"])
+            info.size = entry["bytes"]
+            info.mode = entry["mode"]
+            info.mtime = 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            archive.addfile(info, io.BytesIO(payloads[entry["path"]]))
+    archive_bytes = raw.getvalue()
+    if len(archive_bytes) > MAX_ARCHIVE_BYTES:
+        raise ValueError("compressed snapshot exceeds 8 MiB")
+    return Snapshot(archive_bytes, manifest, manifest_hash, sha256(archive_bytes), provenance)
+
+
 def validate_envelope(envelope: object) -> tuple[bytes, list[dict]]:
     expected = {
         "schema",
