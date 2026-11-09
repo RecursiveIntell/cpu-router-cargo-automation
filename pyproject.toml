@@ -7,7 +7,7 @@ name = "cpu-router-cargo-automation"
 version = "0.1.0"
 description = "Fail-closed architecture-owned Cargo job routing over restricted SSH"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Josh Stevenson" }]
 keywords = ["cargo", "rust", "distributed-build", "ssh", "build-automation"]
