@@ -35,8 +35,29 @@ class TaskFailed(Exception):
     """The request was admitted but its bounded task failed."""
 
 
+# Modules the worker executes from this package. The drift pin covers all of them, because a
+# change to any one changes what an owner runs even when worker.py itself is identical (audit: the
+# snapshot.py admission change would otherwise pass the old worker.py-only check).
+WORKER_CLOSURE_MODULES = ("worker.py", "protocol.py", "snapshot.py", "__init__.py")
+
+
+def worker_closure_files() -> list[Path]:
+    """Package modules the worker executes, in stable order."""
+    package = Path(__file__).resolve().parent
+    return [package / name for name in WORKER_CLOSURE_MODULES]
+
+
 def worker_sha256() -> str:
-    return sha256(Path(__file__).read_bytes())
+    """Digest of the worker's execution closure, bound by module name and content.
+
+    The name prefix stops two different module layouts with identical bytes from colliding.
+    """
+    digest = hashlib.sha256()
+    for path in worker_closure_files():
+        digest.update(path.name.encode("utf-8") + b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def print_worker_sha256() -> int:

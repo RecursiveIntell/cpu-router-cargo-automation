@@ -68,9 +68,9 @@ def main() -> int:
                 identity_file=root / "unused-key",
                 known_hosts_file=root / "unused-known-hosts",
                 toolchain="smoke-toolchain",
-                expected_worker_sha256=hashlib.sha256(
-                    Path(worker.__file__).read_bytes()
-                ).hexdigest(),
+                # Single owner of the worker identity: the canonical closure digest, not a
+                # second copy of the hash that could drift from it.
+                expected_worker_sha256=worker.worker_sha256(),
             )
             config = Config(
                 receipt_dir=receipts,
