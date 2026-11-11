@@ -297,7 +297,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_cargo_wrapper_accepts_verified_worker_module_status(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "worktree"
+            root.mkdir()
             node = config.Node(
                 architecture="x86_64",
                 node="owner",
@@ -310,7 +311,7 @@ class RoutingTests(unittest.TestCase):
                 expected_worker_sha256="a" * 64,
             )
             settings = config.Config(
-                receipt_dir=root / "receipts",
+                receipt_dir=root.parent / "receipts",
                 real_cargo=root / "cargo",
                 nodes={"x86_64": node},
             )
@@ -333,10 +334,12 @@ class RoutingTests(unittest.TestCase):
             }
             git_root = SimpleNamespace(returncode=0, stdout=str(root))
             with (
+                mock.patch("cpu_router.cargo_wrapper.Path.cwd", return_value=root),
+                mock.patch("cpu_router.cargo_wrapper.platform.machine", return_value="x86_64"),
                 mock.patch("cpu_router.cargo_wrapper.load_config", return_value=settings),
                 mock.patch("cpu_router.cargo_wrapper.local_node", return_value="client"),
                 mock.patch("cpu_router.cargo_wrapper.git_snapshot", return_value=source),
-                mock.patch("cpu_router.cargo_wrapper.dispatch", return_value=(receipt, response, root / "receipt.json")),
+                mock.patch("cpu_router.cargo_wrapper.dispatch", return_value=(receipt, response, root.parent / "receipt.json")),
                 mock.patch("cpu_router.cargo_wrapper.subprocess.run", return_value=git_root),
                 mock.patch("cpu_router.cargo_wrapper.sys.argv", ["cpu-cargo", "check"]),
             ):

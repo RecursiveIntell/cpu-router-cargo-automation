@@ -6,6 +6,7 @@ import base64
 import gzip
 import hashlib
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -15,7 +16,7 @@ from typing import NoReturn
 
 from .client import dispatch, local_node
 from .config import Config, load_config
-from .protocol import ELF_MACHINES
+from .protocol import ELF_MACHINES, canonical_architecture
 from .snapshot import git_snapshot, validate_cargo_request
 
 TARGET_ARCHITECTURES = {
@@ -68,7 +69,10 @@ def requested_architecture(arguments: list[str]) -> tuple[str, list[str], str | 
         stripped.append(value)
         index += 1
     if target is None:
-        return "x86_64", stripped, None
+        architecture = canonical_architecture(platform.machine())
+        if architecture not in ELF_MACHINES:
+            raise ValueError("native architecture has no admitted owner")
+        return architecture, stripped, None
     if target not in TARGET_ARCHITECTURES:
         raise ValueError(f"target is not an admitted native owner: {target}")
     return TARGET_ARCHITECTURES[target], stripped, target
@@ -160,6 +164,10 @@ def main() -> int:
         return 1
     root = Path(root_result.stdout.strip()).resolve(strict=True)
     try:
+        if Path.cwd().resolve(strict=True) != root:
+            raise ValueError("remote Cargo requires invocation from the Git root")
+        if config.receipt_dir.resolve().is_relative_to(root):
+            raise ValueError("receipt directory must be outside the Git worktree")
         snapshot = git_snapshot(root)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"[cpu-router] source admission failed: {exc}", file=sys.stderr)
@@ -179,9 +187,13 @@ def main() -> int:
     for delay in RETRY_DELAYS:
         if delay:
             time.sleep(delay)
-        receipt, response, path = dispatch(
-            config, architecture, "cargo-job", value, idempotency_key=job_key
-        )
+        try:
+            receipt, response, path = dispatch(
+                config, architecture, "cargo-job", value, idempotency_key=job_key
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"[cpu-router] remote request failed: {exc}", file=sys.stderr)
+            return 1
         if receipt["status"] not in {"busy", "in-progress"}:
             break
     assert receipt is not None and path is not None
@@ -213,16 +225,20 @@ def main() -> int:
             end="" if result["stderr_tail"].endswith("\n") else "\n",
             file=sys.stderr,
         )
-    if action == "build":
-        output = promote_artifact(root, result.get("artifact"), architecture, target)
-        print(f"[cpu-router] verified artifact: {output}", file=sys.stderr)
-    after = git_snapshot(root)
+    try:
+        after = git_snapshot(root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"[cpu-router] post-job source admission failed: {exc}", file=sys.stderr)
+        return 1
     if (
         after.manifest_sha256 != snapshot.manifest_sha256
         or after.archive_sha256 != snapshot.archive_sha256
     ):
         print("[cpu-router] admitted source changed during remote job", file=sys.stderr)
         return 1
+    if action == "build":
+        output = promote_artifact(root, result.get("artifact"), architecture, target)
+        print(f"[cpu-router] verified artifact: {output}", file=sys.stderr)
     print(f"[cpu-router] verified receipt: {path}", file=sys.stderr)
     return 0
 

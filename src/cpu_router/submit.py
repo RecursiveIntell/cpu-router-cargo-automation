@@ -8,7 +8,9 @@ import socket
 import sys
 from pathlib import Path
 
-MAX_FRAME = 12_000_000
+from .protocol import MAX_REQUEST_BYTES
+
+MAX_FRAME = MAX_REQUEST_BYTES
 MAX_RESPONSE = 24_000_000
 EXIT_BY_STATUS = {"ok": 0, "rejected": 2, "failed": 3, "busy": 75, "in-progress": 75}
 

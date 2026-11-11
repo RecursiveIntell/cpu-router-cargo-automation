@@ -10,13 +10,14 @@ import signal
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
-from .protocol import AGENT_RECEIPT_SCHEMA, UUID_RE
+from .protocol import AGENT_RECEIPT_SCHEMA, MAX_REQUEST_BYTES, UUID_RE
 
-MAX_FRAME = 12_000_000
+MAX_FRAME = MAX_REQUEST_BYTES
 MAX_RESPONSE = 24_000_000
 WORKER_TIMEOUT = 1_200
 
@@ -49,16 +50,42 @@ class Agent:
             response = dict(record["response"])
             response["agent_replayed"] = True
             return response
+        # Publish only a fully initialized digest: contenders never see an
+        # empty lock between exclusive creation and the digest write.
+        with tempfile.NamedTemporaryFile(
+            dir=self.jobs, prefix=".lock-", delete=False
+        ) as handle:
+            candidate = Path(handle.name)
+            handle.write(request_hash.encode())
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
-            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            return error("in-progress", "same idempotency key is active")
+            try:
+                os.link(candidate, lock_path)
+            except FileExistsError:
+                try:
+                    active_hash = lock_path.read_text()
+                except FileNotFoundError:
+                    # The owner completed between link and read; consult its
+                    # durable receipt (or retry admission if no receipt exists).
+                    return self.execute(raw)
+                if active_hash != request_hash:
+                    return error("rejected", "idempotency key collision")
+                return error("in-progress", "same idempotency key is active")
+        finally:
+            candidate.unlink(missing_ok=True)
         response = error("failed", "worker returned no valid response")
         exit_code = None
         started = time.time()
         try:
-            os.write(lock_fd, request_hash.encode())
-            os.close(lock_fd)
+            # A preceding owner can finish after our initial receipt lookup.
+            if receipt_path.exists():
+                record = json.loads(receipt_path.read_text())
+                if record.get("request_sha256") != request_hash:
+                    return error("rejected", "idempotency key collision")
+                response = dict(record["response"])
+                response["agent_replayed"] = True
+                return response
             proc = subprocess.Popen(
                 [sys.executable, "-I", "-m", "cpu_router.worker"],
                 stdin=subprocess.PIPE,
