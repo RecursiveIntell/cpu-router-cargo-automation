@@ -5,10 +5,13 @@ the owner with ``failed to load source for dependency``, because the snapshot is
 git worktree and never carries ``../X``. These tests exercise the admission contract directly.
 """
 
+import io
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cpu_router import snapshot as snap
 
@@ -87,6 +90,38 @@ class SiblingAdmissionTests(unittest.TestCase):
                 snap.build_snapshot_with_siblings(
                     app, {"helper": {"root": str(sibling), "files": files, "tree_sha256": pin}}
                 )
+
+    def test_archive_uses_the_same_read_as_the_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app, source = _workspace(Path(tmp))
+            relative = "src/lib.rs"
+            original = (source / relative).read_bytes()
+            spec = {"root": source, "files": [relative], "tree_sha256": snap.sibling_tree_digest(source, [relative])}
+            read = snap.read_regular_file_no_follow
+
+            def mutate_after_read(root, path):
+                data, metadata = read(root, path)
+                if root == source:
+                    (source / relative).write_bytes(b"modified after read")
+                return data, metadata
+
+            with patch.object(snap, "read_regular_file_no_follow", side_effect=mutate_after_read):
+                built = snap.build_snapshot_with_siblings(app, {"helper": spec})
+            with tarfile.open(fileobj=io.BytesIO(built.archive), mode="r:gz") as archive:
+                member = archive.extractfile("_siblings/helper/src/lib.rs")
+                self.assertIsNotNone(member)
+                self.assertEqual(member.read(), original)
+
+    def test_application_path_collision_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app, source = _workspace(Path(tmp))
+            relative = "src/lib.rs"
+            spec = {"root": source, "files": [relative], "tree_sha256": snap.sibling_tree_digest(source, [relative])}
+            collision = app / "_siblings/helper/src/lib.rs"
+            collision.parent.mkdir(parents=True)
+            collision.write_bytes(b"application file")
+            with self.assertRaisesRegex(ValueError, "source path collision"):
+                snap.build_snapshot_with_siblings(app, {"helper": spec})
 
     def test_sibling_name_and_spec_are_validated(self):
         with tempfile.TemporaryDirectory() as tmp:

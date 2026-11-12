@@ -29,7 +29,7 @@ There are no calls to OpenAI, Anthropic, Pinecone, Weaviate, Supabase, or any ho
 | Secret-name, traversal, symlink, and undeclared-member rejection | Tested |
 | Strict Cargo `check`, `test`, and constrained release `build` grammar | Tested |
 | Durable same-request replay and changed-request collision rejection | Tested |
-| Configured `worker.py` module-file digest, host identity, target architecture, and ELF-machine checks | Tested |
+| Configured worker source digest, host identity, target architecture, and ELF-machine checks | Tested |
 | Live deployment on arbitrary hardware | Operator responsibility |
 | General remote shell | Deliberately unsupported |
 | Windows/macOS owners | Unsupported in v0.1.0 |
@@ -52,10 +52,12 @@ cargo/cpu-cargo
 
 The worker accepts a closed JSON request. It never accepts a shell string, caller-controlled remote path, target directory, manifest path, or arbitrary environment map.
 
+The snapshot module also has explicit, digest-pinned sibling and vendor helpers. The standard `cpu-cargo` route builds its snapshot from the application Git worktree.
+
 ## Prerequisites
 
 - Linux client and owner hosts
-- Python 3.11+
+- Python 3.14+
 - OpenSSH client/server
 - Git
 - `uv` for the documented installation path
@@ -86,7 +88,7 @@ cp config.example.json ~/.config/cpu-router/config.json
 chmod 600 ~/.config/cpu-router/config.json
 ```
 
-`config.json` must name both architecture owners, pinned toolchains, dedicated task-key path, dedicated known-hosts file, and the expected SHA-256 of the installed `worker.py` module file on that owner. This is a narrow installation-drift check, not whole-package integrity. Obtain it without printing source:
+`config.json` must name both architecture owners, pinned toolchains, dedicated task-key path, dedicated known-hosts file, and the expected digest of the installed worker source on that owner. The digest covers `worker.py`, `protocol.py`, `snapshot.py`, and `__init__.py`. Obtain it without printing source:
 
 ```bash
 cpu-router-worker-sha256

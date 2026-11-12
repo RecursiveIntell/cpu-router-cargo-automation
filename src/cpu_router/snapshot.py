@@ -251,14 +251,15 @@ def build_snapshot_with_siblings(
       - ``files``: the relative file paths to carry from that sibling,
       - ``tree_sha256``: the pinned digest of the sibling's (path, sha256) rows.
 
-    Each sibling is carried under ``_siblings/<name>/`` so it cannot collide with app paths. A tree
-    whose digest does not match its pin is refused before anything is admitted. The result is one
+    Each sibling is carried under ``_siblings/<name>/``. A collision with an app member
+    or a digest mismatch refuses the snapshot. The result is one
     ordinary snapshot, so the owner's existing manifest and archive verification applies unchanged.
     """
     app_root = app_root.resolve(strict=True)
     base = git_snapshot(app_root)
     paths = [entry["path"] for entry in base.manifest]
     extra = {}
+    pins = {}
     for name, spec in sorted(siblings.items()):
         if not NAME_RE.fullmatch(name):
             raise ValueError(f"invalid sibling name: {name!r}")
@@ -270,14 +271,12 @@ def build_snapshot_with_siblings(
         files = sorted({str(PurePosixPath(f)) for f in spec["files"]})
         if not files:
             raise ValueError(f"sibling {name} declares no files")
-        digest = sibling_tree_digest(sibling_root, files)
-        if digest != spec["tree_sha256"]:
-            raise ValueError(f"sibling {name} tree digest does not match its pin")
+        label = f"sibling {name}"
+        pins[label] = spec["tree_sha256"]
         for relative in files:
             target = f"{SIBLING_PREFIX}/{name}/{relative}"
-            paths.append(target)
-            extra[target] = (sibling_root, PurePosixPath(relative))
-    return _snapshot_from_mixed_sources(app_root, paths, extra, provenance or base.provenance)
+            extra[target] = (sibling_root, validate_relative_path(relative), label)
+    return _snapshot_from_mixed_sources(app_root, paths, extra, pins, provenance or base.provenance)
 
 
 VENDOR_PREFIX = "_vendor"
@@ -298,38 +297,38 @@ def build_vendor_snapshot(app_root: Path, vendor: dict, provenance: dict | None 
     files = sorted({str(PurePosixPath(f)) for f in vendor["files"]})
     if not files:
         raise ValueError("vendor declares no files")
-    digest = sibling_tree_digest(vendor_root, files)
-    if digest != vendor["tree_sha256"]:
-        raise ValueError("vendor tree digest does not match its pin")
     base_paths = [entry["path"] for entry in git_snapshot(app_root).manifest]
-    extra = {}
-    paths = list(base_paths)
-    for relative in files:
-        target = f"{VENDOR_PREFIX}/{relative}"
-        paths.append(target)
-        extra[target] = (vendor_root, PurePosixPath(relative))
+    extra = {
+        f"{VENDOR_PREFIX}/{relative}": (vendor_root, validate_relative_path(relative), "vendor")
+        for relative in files
+    }
     return _snapshot_from_mixed_sources(
-        app_root.resolve(strict=True), paths, extra, provenance or {}
+        app_root.resolve(strict=True), base_paths, extra, {"vendor": vendor["tree_sha256"]}, provenance or {}
     )
 
 
-def _snapshot_from_mixed_sources(app_root, paths, extra, provenance) -> Snapshot:
+def _snapshot_from_mixed_sources(app_root, paths, extra, pins, provenance) -> Snapshot:
     """Build a snapshot whose entries come from the app root or explicit sibling roots.
 
     Reuses the same bounds and tar layout as create_snapshot_from_paths so the owner sees one format.
     """
-    unique = sorted(set(paths))
+    app_paths = set(paths)
+    collisions = app_paths.intersection(extra)
+    if collisions:
+        raise ValueError(f"snapshot source path collision: {min(collisions)}")
+    unique = sorted(app_paths.union(extra))
     if len(unique) > MAX_FILES:
         raise ValueError("snapshot file-count limit exceeded")
     if "Cargo.toml" not in unique or "Cargo.lock" not in unique:
         raise ValueError("snapshot requires root Cargo.toml and Cargo.lock")
     manifest = []
     payloads = {}
+    pin_rows = {label: [] for label in pins}
     total = 0
     for relative in unique:
         parsed = validate_relative_path(relative)
         if relative in extra:
-            source_root, source_relative = extra[relative]
+            source_root, source_relative, label = extra[relative]
             data, metadata = read_regular_file_no_follow(source_root, source_relative)
         else:
             data, metadata = read_regular_file_no_follow(app_root, parsed)
@@ -337,8 +336,14 @@ def _snapshot_from_mixed_sources(app_root, paths, extra, provenance) -> Snapshot
         if total > MAX_TOTAL_BYTES:
             raise ValueError("snapshot aggregate-size limit exceeded")
         mode = 0o755 if metadata.st_mode & stat.S_IXUSR else 0o644
-        manifest.append({"path": relative, "bytes": len(data), "sha256": sha256(data), "mode": mode})
+        digest = sha256(data)
+        if relative in extra:
+            pin_rows[label].append({"path": source_relative.as_posix(), "sha256": digest})
+        manifest.append({"path": relative, "bytes": len(data), "sha256": digest, "mode": mode})
         payloads[relative] = data
+    for label, rows in pin_rows.items():
+        if sha256(canonical_json(rows)) != pins[label]:
+            raise ValueError(f"{label} tree digest does not match its pin")
     manifest_hash = sha256(canonical_json(manifest))
     raw = io.BytesIO()
     with (
