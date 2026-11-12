@@ -9,10 +9,13 @@ digest, and refused on mismatch. They cover the admission side; the owner config
 test_contracts.py alongside the other worker contract checks.
 """
 
+import io
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cpu_router import snapshot as snap
 
@@ -66,6 +69,38 @@ class VendorAdmissionTests(unittest.TestCase):
             files = ["left-pad-1.0.0/Cargo.toml", "left-pad-1.0.0/src/lib.rs"]
             with self.assertRaisesRegex(ValueError, "tree digest does not match"):
                 snap.build_vendor_snapshot(app, {"root": str(vendor), "files": files, "tree_sha256": "0" * 64})
+
+    def test_archive_uses_the_same_read_as_the_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app, source = _app_with_vendor(Path(tmp))
+            relative = "left-pad-1.0.0/src/lib.rs"
+            original = (source / relative).read_bytes()
+            spec = {"root": source, "files": [relative], "tree_sha256": snap.sibling_tree_digest(source, [relative])}
+            read = snap.read_regular_file_no_follow
+
+            def mutate_after_read(root, path):
+                data, metadata = read(root, path)
+                if root == source:
+                    (source / relative).write_bytes(b"modified after read")
+                return data, metadata
+
+            with patch.object(snap, "read_regular_file_no_follow", side_effect=mutate_after_read):
+                built = snap.build_vendor_snapshot(app, spec)
+            with tarfile.open(fileobj=io.BytesIO(built.archive), mode="r:gz") as archive:
+                member = archive.extractfile("_vendor/left-pad-1.0.0/src/lib.rs")
+                self.assertIsNotNone(member)
+                self.assertEqual(member.read(), original)
+
+    def test_application_path_collision_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app, source = _app_with_vendor(Path(tmp))
+            relative = "left-pad-1.0.0/src/lib.rs"
+            spec = {"root": source, "files": [relative], "tree_sha256": snap.sibling_tree_digest(source, [relative])}
+            collision = app / "_vendor/left-pad-1.0.0/src/lib.rs"
+            collision.parent.mkdir(parents=True)
+            collision.write_bytes(b"application file")
+            with self.assertRaisesRegex(ValueError, "source path collision"):
+                snap.build_vendor_snapshot(app, spec)
 
     def test_vendor_must_be_declared_explicitly(self):
         with tempfile.TemporaryDirectory() as tmp:
